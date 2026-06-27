@@ -1,0 +1,535 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <title>Block Smasher</title>
+    <style>
+        body, html {
+            margin: 0;
+            padding: 0;
+            width: 100%;
+            height: 100%;
+            background-color: #000;
+            overflow: hidden;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+        }
+        canvas {
+            display: block;
+        }
+    </style>
+    <!-- Phaser 3 Framework -->
+    <script src="https://cdn.jsdelivr.net/npm/phaser@3.60.0/dist/phaser.min.js"></script>
+</head>
+<body>
+
+<script>
+    /**
+     * MOCK YOUTUBE PLAYABLES SDK
+     * This ensures the game runs perfectly in a normal browser for testing,
+     * while seamlessly taking over when the actual SDK is present.
+     */
+    window.YouTubePlayables = window.YouTubePlayables || {
+        boot: function(callback) {
+            console.log("[YT SDK] Booting game...");
+            callback();
+        },
+        firstFrameReady: function() {
+            console.log("[YT SDK] First frame is ready!");
+        },
+        gameReady: function() {
+            console.log("[YT SDK] Game loaded and ready for player!");
+        },
+        isAudioEnabled: function() {
+            return true;
+        },
+        setAudioChangeCallback: function(callback) {
+            console.log("[YT SDK] Audio change callback registered.");
+            // Simulate an event binding in our mock
+            this._audioCallback = callback;
+        },
+        sendScore: function(score) {
+            console.log("[YT SDK] Score sent:", score);
+        },
+        saveData: function(data) {
+            console.log("[YT SDK] Data saved:", data);
+            localStorage.setItem('youngscreen_save', JSON.stringify(data));
+        },
+        loadData: function() {
+            return new Promise((resolve) => {
+                const data = localStorage.getItem('youngscreen_save');
+                resolve(data ? JSON.parse(data) : { highscore: 0 });
+            });
+        }
+    };
+
+    // Global Game State
+    let globalHighScore = 0;
+
+    /**
+     * SCENE: BOOT
+     * Handles asset generation (vector graphics), SDK first frame, and loading saved data.
+     */
+    class BootScene extends Phaser.Scene {
+        constructor() {
+            super('BootScene');
+        }
+
+        preload() {
+            // Display loading text
+            const text = this.add.text(this.scale.width / 2, this.scale.height / 2, 'BOOTING SYSTEM...', {
+                fontFamily: 'Courier',
+                fontSize: '24px',
+                fill: '#00ffff',
+                align: 'center'
+            }).setOrigin(0.5);
+
+            // Fetch high score via YT SDK
+            if (window.YouTubePlayables.loadData) {
+                window.YouTubePlayables.loadData().then(data => {
+                    if (data && data.highscore) {
+                        globalHighScore = data.highscore;
+                    }
+                }).catch(err => console.error("YT SDK load error:", err));
+            }
+        }
+
+        create() {
+            // Generate procedural vector graphics (Zero External Assets)
+            const g = this.make.graphics({x: 0, y: 0, add: false});
+            
+            // 1. Paddle (Glowing Blue)
+            g.fillStyle(0x004488, 0.6); 
+            g.fillRoundedRect(0, 0, 120, 24, 12);
+            g.fillStyle(0x00ffff, 1); 
+            g.fillRoundedRect(6, 6, 108, 12, 6);
+            g.generateTexture('paddle', 120, 24);
+            g.clear();
+
+            // 2. Ball (Neon Green)
+            g.fillStyle(0x003300, 0.5);
+            g.fillCircle(10, 10, 10);
+            g.fillStyle(0x00ff00, 1);
+            g.fillCircle(10, 10, 6);
+            g.generateTexture('ball', 20, 20);
+            g.clear();
+
+            // 3. Bricks (Pink, Yellow, Cyan)
+            const colors = [0xff00ff, 0xffff00, 0x00ffff];
+            colors.forEach((color, index) => {
+                g.fillStyle(color, 0.3);
+                g.fillRect(0, 0, 60, 25);
+                g.fillStyle(color, 1);
+                g.fillRect(3, 3, 54, 19);
+                g.lineStyle(2, 0xffffff, 0.8);
+                g.strokeRect(3, 3, 54, 19);
+                g.generateTexture(`brick_${index}`, 60, 25);
+                g.clear();
+            });
+
+            // 4. Particle (White flare)
+            g.fillStyle(0xffffff, 1);
+            g.fillRect(0, 0, 6, 6);
+            g.generateTexture('particle', 6, 6);
+            g.clear();
+
+            // 5. Space Grid Background
+            g.lineStyle(1, 0x001133, 0.5);
+            for(let i = 0; i <= 64; i += 32) {
+                g.moveTo(i, 0); g.lineTo(i, 64);
+                g.moveTo(0, i); g.lineTo(64, i);
+            }
+            g.fillStyle(0xffffff, 0.8);
+            g.fillCircle(32, 32, 1); // Tiny star
+            g.generateTexture('bgGrid', 64, 64);
+            g.clear();
+
+            // SDK: Signal that the first frame is ready
+            window.YouTubePlayables.firstFrameReady();
+            
+            // Proceed to Menu
+            this.scene.start('MenuScene');
+        }
+    }
+
+    /**
+     * SCENE: MENU
+     * Main title screen. Handles the gameReady hook and audio syncing.
+     */
+    class MenuScene extends Phaser.Scene {
+        constructor() {
+            super('MenuScene');
+        }
+
+        create() {
+            const width = this.scale.width;
+            const height = this.scale.height;
+
+            // Space Background
+            this.bg = this.add.tileSprite(0, 0, width, height, 'bgGrid').setOrigin(0);
+
+            // Title Typography
+            const titleStyle = { fontFamily: 'Courier', fontSize: '32px', fontStyle: 'bold', fill: '#00ffff', align: 'center' };
+            const subStyle = { fontFamily: 'Courier', fontSize: '18px', fill: '#ff00ff', align: 'center' };
+            
+            this.titleText = this.add.text(width / 2, height / 3, 'BLOCK SMASHER', titleStyle).setOrigin(0.5);
+            this.titleText.setShadow(0, 0, '#00ffff', 15, true, true);
+
+            this.highScoreText = this.add.text(width / 2, height / 2, `HIGH SCORE: ${globalHighScore}`, subStyle).setOrigin(0.5);
+
+            // Pulsing Start Text
+            this.startText = this.add.text(width / 2, height / 1.5, 'TAP TO START', { ...titleStyle, fontSize: '24px', fill: '#00ff00' }).setOrigin(0.5);
+            this.startText.setShadow(0, 0, '#00ff00', 10, true, true);
+
+            this.tweens.add({
+                targets: this.startText,
+                alpha: 0.2,
+                duration: 800,
+                yoyo: true,
+                repeat: -1
+            });
+
+            // Creator Signature
+            this.signatureText = this.add.text(width / 2, height - 30, 'kod yapımcısı: kemal kartal youngscreen', {
+                fontFamily: 'Courier', fontSize: '14px', fill: '#888888', align: 'center'
+            }).setOrigin(0.5);
+
+            // Input to start
+            this.input.on('pointerdown', () => {
+                this.scene.start('GameScene');
+            });
+
+            // SDK: Signal Game Ready & Setup Audio State
+            window.YouTubePlayables.gameReady();
+            
+            this.sound.setMute(!window.YouTubePlayables.isAudioEnabled());
+            window.YouTubePlayables.setAudioChangeCallback((enabled) => {
+                this.sound.setMute(!enabled);
+            });
+
+            this.scale.on('resize', this.resize, this);
+        }
+
+        update() {
+            this.bg.tilePositionY -= 0.5;
+        }
+
+        resize(gameSize) {
+            const width = gameSize.width;
+            const height = gameSize.height;
+            this.bg.setSize(width, height);
+            this.titleText.setPosition(width / 2, height / 3);
+            this.highScoreText.setPosition(width / 2, height / 2);
+            this.startText.setPosition(width / 2, height / 1.5);
+            if (this.signatureText) this.signatureText.setPosition(width / 2, height - 30);
+        }
+    }
+
+    /**
+     * SCENE: GAME
+     * The core gameplay loop with responsive layout and physics.
+     */
+    class GameScene extends Phaser.Scene {
+        constructor() {
+            super('GameScene');
+        }
+
+        create() {
+            const width = this.scale.width;
+            const height = this.scale.height;
+
+            this.score = 0;
+            this.lives = 3;
+            this.lastCenterX = width / 2;
+
+            // Background
+            this.bg = this.add.tileSprite(0, 0, width, height, 'bgGrid').setOrigin(0);
+
+            // Setup Physics World (open at the bottom)
+            this.physics.world.setBounds(0, 0, width, height);
+            this.physics.world.checkCollision.down = false;
+
+            // Create Paddle
+            this.paddle = this.physics.add.image(width / 2, height - 80, 'paddle').setImmovable();
+            
+            // Create Ball
+            this.ball = this.physics.add.image(width / 2, height - 110, 'ball');
+            this.ball.setCollideWorldBounds(true);
+            this.ball.setBounce(1);
+            this.ball.setData('onPaddle', true);
+
+            // Create Bricks
+            this.bricks = this.physics.add.staticGroup();
+            this.buildLevel();
+
+            // Setup Particles
+            this.particles = this.add.particles(0, 0, 'particle', {
+                lifespan: 600,
+                speed: { min: 50, max: 250 },
+                scale: { start: 1, end: 0 },
+                blendMode: 'ADD',
+                emitting: false
+            });
+
+            // UI
+            const uiStyle = { fontFamily: 'Courier', fontSize: '20px', fill: '#fff', fontStyle: 'bold' };
+            this.scoreText = this.add.text(20, 20, 'SCORE: 0', uiStyle);
+            this.livesText = this.add.text(width - 20, 20, 'LIVES: 3', uiStyle).setOrigin(1, 0);
+
+            // Collisions
+            this.physics.add.collider(this.ball, this.bricks, this.hitBrick, null, this);
+            this.physics.add.collider(this.ball, this.paddle, this.hitPaddle, null, this);
+
+            // Controls (Touch / Mouse slide)
+            this.input.on('pointermove', (pointer) => {
+                this.paddle.x = Phaser.Math.Clamp(pointer.x, this.paddle.width / 2, this.scale.width - this.paddle.width / 2);
+                if (this.ball.getData('onPaddle')) {
+                    this.ball.x = this.paddle.x;
+                }
+            });
+
+            this.input.on('pointerdown', () => {
+                if (this.ball.getData('onPaddle')) {
+                    this.ball.setData('onPaddle', false);
+                    this.ball.setVelocity(-75, -400);
+                }
+            });
+
+            // Handle Resize
+            this.scale.on('resize', this.resize, this);
+        }
+
+        buildLevel() {
+            this.bricks.clear(true, true);
+            const width = this.scale.width;
+            
+            const brickWidth = 60;
+            const brickHeight = 25;
+            const padding = 10;
+            const totalBrickWidth = brickWidth + padding;
+
+            // Calculate columns that fit safely
+            const maxCols = Math.floor((width - 40) / totalBrickWidth);
+            const cols = Math.min(10, maxCols); 
+            const rows = 5;
+
+            const startX = (width - (cols * totalBrickWidth) + padding) / 2;
+            const startY = 80;
+
+            for (let i = 0; i < cols; i++) {
+                for (let j = 0; j < rows; j++) {
+                    // Pick texture based on row index
+                    const texIndex = j % 3;
+                    const bX = startX + i * totalBrickWidth + brickWidth / 2;
+                    const bY = startY + j * (brickHeight + padding) + brickHeight / 2;
+                    
+                    this.bricks.create(bX, bY, `brick_${texIndex}`);
+                }
+            }
+        }
+
+        hitBrick(ball, brick) {
+            brick.disableBody(true, true);
+            this.particles.emitParticleAt(brick.x, brick.y, 15);
+
+            this.score += 10;
+            this.scoreText.setText('SCORE: ' + this.score);
+
+            // Check Win Condition
+            if (this.bricks.countActive() === 0) {
+                this.buildLevel();
+                this.resetBall();
+                this.ball.setVelocity(0, 0); // Stop momentarily before they click
+            }
+        }
+
+        hitPaddle(ball, paddle) {
+            // Apply spin/angle based on where the ball hits the paddle
+            let diff = 0;
+            if (ball.x < paddle.x) {
+                diff = paddle.x - ball.x;
+                ball.setVelocityX(-7 * diff);
+            } else if (ball.x > paddle.x) {
+                diff = ball.x - paddle.x;
+                ball.setVelocityX(7 * diff);
+            } else {
+                ball.setVelocityX(2 + Math.random() * 8);
+            }
+        }
+
+        resetBall() {
+            this.ball.setVelocity(0);
+            this.ball.setPosition(this.paddle.x, this.paddle.y - 30);
+            this.ball.setData('onPaddle', true);
+        }
+
+        update() {
+            this.bg.tilePositionY -= 0.5;
+
+            // Check Life Loss
+            if (this.ball.y > this.scale.height) {
+                this.lives--;
+                this.livesText.setText('LIVES: ' + this.lives);
+                
+                // Screen shake effect
+                this.cameras.main.shake(200, 0.01);
+
+                if (this.lives === 0) {
+                    this.scene.start('GameOverScene', { score: this.score });
+                } else {
+                    this.resetBall();
+                }
+            }
+        }
+
+        resize(gameSize) {
+            const width = gameSize.width;
+            const height = gameSize.height;
+
+            this.physics.world.setBounds(0, 0, width, height);
+            this.bg.setSize(width, height);
+
+            // Reposition UI
+            this.livesText.setPosition(width - 20, 20);
+
+            // Real-time centering recalculation for active elements
+            const dx = (width / 2) - this.lastCenterX;
+            this.lastCenterX = width / 2;
+
+            this.paddle.y = height - 80;
+            this.paddle.x = Phaser.Math.Clamp(this.paddle.x + dx, this.paddle.width / 2, width - this.paddle.width / 2);
+
+            if (this.ball.getData('onPaddle')) {
+                this.ball.setPosition(this.paddle.x, this.paddle.y - 30);
+            }
+
+            // Shift remaining bricks to keep them centered gracefully
+            this.bricks.getChildren().forEach(brick => {
+                brick.x += dx;
+                brick.refreshBody();
+            });
+        }
+    }
+
+    /**
+     * SCENE: GAME OVER
+     * Submits scores to YouTube SDK and prepares for restart.
+     */
+    class GameOverScene extends Phaser.Scene {
+        constructor() {
+            super('GameOverScene');
+        }
+
+        init(data) {
+            this.finalScore = data.score || 0;
+        }
+
+        create() {
+            const width = this.scale.width;
+            const height = this.scale.height;
+
+            // Process High Score & SDK Hooks
+            let isNewHighScore = false;
+            if (this.finalScore > globalHighScore) {
+                globalHighScore = this.finalScore;
+                isNewHighScore = true;
+                
+                // SDK: Save persistent data
+                window.YouTubePlayables.saveData({ highscore: globalHighScore });
+            }
+
+            // SDK: Send final score
+            window.YouTubePlayables.sendScore(this.finalScore);
+
+            // Visuals
+            this.bg = this.add.tileSprite(0, 0, width, height, 'bgGrid').setOrigin(0);
+
+            const style = { fontFamily: 'Courier', fontSize: '40px', fill: '#ff0000', align: 'center', fontStyle: 'bold' };
+            this.overText = this.add.text(width / 2, height / 3, 'GAME OVER', style).setOrigin(0.5);
+            this.overText.setShadow(0, 0, '#ff0000', 20, true, true);
+
+            this.scoreText = this.add.text(width / 2, height / 2, `SCORE: ${this.finalScore}`, {
+                fontFamily: 'Courier', fontSize: '24px', fill: '#fff'
+            }).setOrigin(0.5);
+
+            if (isNewHighScore) {
+                this.newBest = this.add.text(width / 2, height / 2 + 35, 'NEW HIGH SCORE!', {
+                    fontFamily: 'Courier', fontSize: '20px', fill: '#ffff00'
+                }).setOrigin(0.5);
+                
+                this.tweens.add({
+                    targets: this.newBest,
+                    scale: 1.1,
+                    duration: 400,
+                    yoyo: true,
+                    repeat: -1
+                });
+            }
+
+            this.restartText = this.add.text(width / 2, height / 1.3, 'TAP TO RESTART', {
+                fontFamily: 'Courier', fontSize: '24px', fill: '#00ffff'
+            }).setOrigin(0.5);
+            this.restartText.setShadow(0, 0, '#00ffff', 10, true, true);
+
+            this.time.delayedCall(500, () => {
+                this.input.once('pointerdown', () => {
+                    this.scene.start('GameScene');
+                });
+            });
+
+            this.scale.on('resize', this.resize, this);
+        }
+        
+        update() {
+            this.bg.tilePositionY -= 0.5;
+        }
+
+        resize(gameSize) {
+            const width = gameSize.width;
+            const height = gameSize.height;
+            this.bg.setSize(width, height);
+            this.overText.setPosition(width / 2, height / 3);
+            this.scoreText.setPosition(width / 2, height / 2);
+            if (this.newBest) this.newBest.setPosition(width / 2, height / 2 + 35);
+            this.restartText.setPosition(width / 2, height / 1.3);
+        }
+    }
+
+    /**
+     * CONFIGURATION & BOOTSTRAP
+     */
+    const config = {
+        type: Phaser.AUTO,
+        backgroundColor: '#000000',
+        scale: {
+            mode: Phaser.Scale.RESIZE, // Allows fluid dynamic scaling based on viewport
+            autoCenter: Phaser.Scale.CENTER_BOTH,
+            width: window.innerWidth,
+            height: window.innerHeight
+        },
+        physics: {
+            default: 'arcade',
+            arcade: {
+                gravity: { y: 0 },
+                debug: false
+            }
+        },
+        scene: [BootScene, MenuScene, GameScene, GameOverScene]
+    };
+
+    // System Bootstrapping (Ensure YouTube SDK wrapper initialization)
+    window.onload = () => {
+        if (window.YouTubePlayables && window.YouTubePlayables.boot) {
+            window.YouTubePlayables.boot(() => {
+                new Phaser.Game(config);
+            });
+        } else {
+            // Fallback just in case the mock is ever bypassed
+            new Phaser.Game(config);
+        }
+    };
+</script>
+</body>
+</html>
